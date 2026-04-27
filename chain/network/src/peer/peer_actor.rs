@@ -150,7 +150,10 @@ pub(crate) struct PeerActor {
     /// This node's id and address (either listening or socket address).
     my_node_info: PeerInfo,
 
-    /// TEST-ONLY
+    /// TEST-ONLY. Identity of the underlying stream; surfaced only in
+    /// `#[cfg(test)]` event emissions. NetworkState no longer receives
+    /// it.
+    #[allow(dead_code)]
     stream_id: crate::tcp::StreamId,
     /// Peer address from connection.
     peer_addr: SocketAddr,
@@ -1429,22 +1432,35 @@ impl messaging::Actor for PeerActor {
         match &self.peer_status {
             // If PeerActor is in Connecting state, then
             // it was not registered in the NetworkState,
-            // so there is nothing to be done.
+            // so there is nothing to be done — emit the test event
+            // synchronously here (the Ready path's emission happens
+            // inside on_peer_disconnected so it follows peer_store
+            // updates).
+            //
+            // TODO(gprusak): ConnectionClosed reporting is still split
+            // across two sites — synchronously here for Connecting, and
+            // asynchronously from on_peer_disconnected for Ready.
+            // Centralize once we get rid of actix.
             PeerStatus::Connecting(..) => {
-                // TODO(gprusak): reporting ConnectionClosed event is quite scattered right now and
-                // it is very ugly: it may happen here, in spawn_inner, or in NetworkState::unregister().
-                // We should find a way to centralize it.
                 #[cfg(test)]
                 self.network_state.config.event_sink.send(Event::ConnectionClosed(
                     ConnectionClosedEvent { stream_id: self.stream_id, reason: closing_reason },
                 ));
             }
-            // Clean up the Connection from the NetworkState.
+            // Clean up the Connection from the NetworkState. The
+            // test-only ConnectionClosed event is emitted inside
+            // on_peer_disconnected after all state updates.
             PeerStatus::Ready(conn) => {
                 let network_state = self.network_state.clone();
                 let clock = self.clock.clone();
                 let conn = conn.clone();
-                network_state.unregister(&clock, &conn, self.stream_id, closing_reason);
+                network_state.unregister(
+                    &clock,
+                    &conn,
+                    #[cfg(test)]
+                    self.stream_id,
+                    closing_reason,
+                );
             }
         }
     }
