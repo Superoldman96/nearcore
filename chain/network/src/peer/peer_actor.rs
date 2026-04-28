@@ -788,14 +788,15 @@ impl PeerActor {
                                         async move {
                                             loop {
                                                 interval.tick(&clock).await;
-                                                conn.send_message(Arc::new(
-                                                    PeerMessage::RequestUpdateNonce(PartialEdgeInfo::new(
+                                                let nonce_request = PeerMessage::RequestUpdateNonce(
+                                                    PartialEdgeInfo::new(
                                                         &network_state.config.node_id(),
                                                         &conn.peer_info.id,
                                                         Edge::create_fresh_nonce(&clock),
                                                         &network_state.config.node_key,
-                                                    )
-                                                )));
+                                                    ),
+                                                );
+                                                conn.send_message(Arc::new(nonce_request));
 
                                             }
                                         }
@@ -1206,9 +1207,10 @@ impl PeerActor {
                 }
                 let network_state = self.network_state.clone();
                 let clock = self.clock.clone();
+                let tcp = self.tcp.clone();
                 self.handle.spawn("handle sync accounts data", async move {
                     if let Some(err) =
-                        network_state.add_accounts_data(&clock, msg.accounts_data).await
+                        network_state.add_accounts_data(&clock, msg.accounts_data, tcp).await
                     {
                         conn.stop(Some(match err {
                             AccountDataError::InvalidSignature => ReasonForBan::InvalidSignature,
@@ -1229,8 +1231,9 @@ impl PeerActor {
                     return;
                 }
                 let network_state = self.network_state.clone();
+                let tcp = self.tcp.clone();
                 self.handle.spawn("handle sync snapshot hosts", async move {
-                    if let Some(err) = network_state.add_snapshot_hosts(msg.hosts).await {
+                    if let Some(err) = network_state.add_snapshot_hosts(msg.hosts, tcp).await {
                         conn.stop(Some(match err {
                             SnapshotHostInfoError::VerificationError(
                                 SnapshotHostInfoVerificationError::InvalidSignature,
